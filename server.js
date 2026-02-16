@@ -1,10 +1,11 @@
 const express = require('express');
 const cors = require('cors');
+const { body, validationResult } = require('express-validator');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// In-memory data store (in a real app, this would be a database)
+// In-memory data store
 let menuItems = [
     {
         id: 1,
@@ -48,16 +49,70 @@ app.use((req, res, next) => {
     const method = req.method;
     const url = req.url;
     
-    // Log basic request info
     console.log(`[${timestamp}] ${method} ${url}`);
     
-    // Log body for POST and PUT requests
     if ((method === 'POST' || method === 'PUT') && req.body && Object.keys(req.body).length > 0) {
         console.log('Request Body:', JSON.stringify(req.body, null, 2));
     }
     
     next();
 });
+
+// Validation rules for menu items
+const menuItemValidationRules = () => {
+    return [
+        body('name')
+            .notEmpty().withMessage('Name is required')
+            .isString().withMessage('Name must be a string')
+            .isLength({ min: 3 }).withMessage('Name must be at least 3 characters long'),
+        
+        body('description')
+            .notEmpty().withMessage('Description is required')
+            .isString().withMessage('Description must be a string')
+            .isLength({ min: 10 }).withMessage('Description must be at least 10 characters long'),
+        
+        body('price')
+            .notEmpty().withMessage('Price is required')
+            .isNumeric().withMessage('Price must be a number')
+            .custom(value => value > 0).withMessage('Price must be greater than 0'),
+        
+        body('category')
+            .notEmpty().withMessage('Category is required')
+            .isString().withMessage('Category must be a string')
+            .isIn(['appetizer', 'entree', 'dessert', 'beverage'])
+            .withMessage('Category must be one of: appetizer, entree, dessert, beverage'),
+        
+        body('ingredients')
+            .notEmpty().withMessage('Ingredients are required')
+            .isArray({ min: 1 }).withMessage('Ingredients must be an array with at least 1 item')
+            .custom(ingredients => {
+                return ingredients.every(ing => typeof ing === 'string' && ing.trim().length > 0);
+            }).withMessage('Each ingredient must be a non-empty string'),
+        
+        body('available')
+            .optional()
+            .isBoolean().withMessage('Available must be a boolean')
+    ];
+};
+
+// Validation result handler
+const validate = (req, res, next) => {
+    const errors = validationResult(req);
+    if (errors.isEmpty()) {
+        return next();
+    }
+    
+    const extractedErrors = errors.array().map(err => ({
+        field: err.path,
+        message: err.msg
+    }));
+    
+    // 400 Bad Request for validation errors
+    return res.status(400).json({
+        error: 'Validation failed',
+        details: extractedErrors
+    });
+};
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -75,6 +130,7 @@ app.get('/', (req, res) => {
 
 // GET /api/menu - Retrieve all menu items
 app.get('/api/menu', (req, res) => {
+    // 200 OK for successful GET
     res.status(200).json({
         count: menuItems.length,
         items: menuItems
@@ -87,99 +143,19 @@ app.get('/api/menu/:id', (req, res) => {
     const menuItem = menuItems.find(item => item.id === id);
     
     if (!menuItem) {
+        // 404 Not Found
         return res.status(404).json({ 
             error: 'Menu item not found',
             message: `No menu item exists with id ${id}`
         });
     }
     
+    // 200 OK for successful GET
     res.status(200).json(menuItem);
 });
 
-// Validation function for menu items
-const validateMenuItem = (data, isUpdate = false) => {
-    const errors = [];
-    
-    // Name validation
-    if (!isUpdate || (isUpdate && data.name !== undefined)) {
-        if (!data.name) {
-            errors.push({ field: 'name', message: 'Name is required' });
-        } else if (typeof data.name !== 'string') {
-            errors.push({ field: 'name', message: 'Name must be a string' });
-        } else if (data.name.length < 3) {
-            errors.push({ field: 'name', message: 'Name must be at least 3 characters long' });
-        }
-    }
-    
-    // Description validation
-    if (!isUpdate || (isUpdate && data.description !== undefined)) {
-        if (!data.description) {
-            errors.push({ field: 'description', message: 'Description is required' });
-        } else if (typeof data.description !== 'string') {
-            errors.push({ field: 'description', message: 'Description must be a string' });
-        } else if (data.description.length < 10) {
-            errors.push({ field: 'description', message: 'Description must be at least 10 characters long' });
-        }
-    }
-    
-    // Price validation
-    if (!isUpdate || (isUpdate && data.price !== undefined)) {
-        if (data.price === undefined || data.price === null) {
-            errors.push({ field: 'price', message: 'Price is required' });
-        } else if (typeof data.price !== 'number') {
-            errors.push({ field: 'price', message: 'Price must be a number' });
-        } else if (data.price <= 0) {
-            errors.push({ field: 'price', message: 'Price must be greater than 0' });
-        }
-    }
-    
-    // Category validation
-    if (!isUpdate || (isUpdate && data.category !== undefined)) {
-        const validCategories = ['appetizer', 'entree', 'dessert', 'beverage'];
-        if (!data.category) {
-            errors.push({ field: 'category', message: 'Category is required' });
-        } else if (typeof data.category !== 'string') {
-            errors.push({ field: 'category', message: 'Category must be a string' });
-        } else if (!validCategories.includes(data.category)) {
-            errors.push({ field: 'category', message: 'Category must be one of: appetizer, entree, dessert, beverage' });
-        }
-    }
-    
-    // Ingredients validation
-    if (!isUpdate || (isUpdate && data.ingredients !== undefined)) {
-        if (!data.ingredients) {
-            errors.push({ field: 'ingredients', message: 'Ingredients are required' });
-        } else if (!Array.isArray(data.ingredients)) {
-            errors.push({ field: 'ingredients', message: 'Ingredients must be an array' });
-        } else if (data.ingredients.length < 1) {
-            errors.push({ field: 'ingredients', message: 'Ingredients must have at least 1 item' });
-        } else {
-            const invalidIngredients = data.ingredients.some(ing => typeof ing !== 'string' || ing.trim().length === 0);
-            if (invalidIngredients) {
-                errors.push({ field: 'ingredients', message: 'Each ingredient must be a non-empty string' });
-            }
-        }
-    }
-    
-    // Available validation (optional)
-    if (data.available !== undefined && typeof data.available !== 'boolean') {
-        errors.push({ field: 'available', message: 'Available must be a boolean' });
-    }
-    
-    return errors;
-};
-
-// POST /api/menu - Add a new menu item
-app.post('/api/menu', (req, res) => {
-    const errors = validateMenuItem(req.body);
-    
-    if (errors.length > 0) {
-        return res.status(400).json({
-            error: 'Validation failed',
-            details: errors
-        });
-    }
-    
+// POST /api/menu - Add a new menu item (with validation)
+app.post('/api/menu', menuItemValidationRules(), validate, (req, res) => {
     const newMenuItem = {
         id: nextId++,
         name: req.body.name,
@@ -192,41 +168,36 @@ app.post('/api/menu', (req, res) => {
     
     menuItems.push(newMenuItem);
     
+    // 201 Created for successful POST
     res.status(201).json({
         message: 'Menu item created successfully',
         item: newMenuItem
     });
 });
 
-// PUT /api/menu/:id - Update an existing menu item
-app.put('/api/menu/:id', (req, res) => {
+// PUT /api/menu/:id - Update an existing menu item (with validation)
+app.put('/api/menu/:id', menuItemValidationRules(), validate, (req, res) => {
     const id = parseInt(req.params.id);
     const index = menuItems.findIndex(item => item.id === id);
     
     if (index === -1) {
+        // 404 Not Found
         return res.status(404).json({
             error: 'Menu item not found',
             message: `No menu item exists with id ${id}`
         });
     }
     
-    const errors = validateMenuItem(req.body, true);
-    
-    if (errors.length > 0) {
-        return res.status(400).json({
-            error: 'Validation failed',
-            details: errors
-        });
-    }
-    
     const updatedMenuItem = {
         ...menuItems[index],
         ...req.body,
-        id: id // Ensure ID doesn't change
+        id: id, // Ensure ID doesn't change
+        available: req.body.available !== undefined ? req.body.available : menuItems[index].available
     };
     
     menuItems[index] = updatedMenuItem;
     
+    // 200 OK for successful PUT
     res.status(200).json({
         message: 'Menu item updated successfully',
         item: updatedMenuItem
@@ -239,6 +210,7 @@ app.delete('/api/menu/:id', (req, res) => {
     const index = menuItems.findIndex(item => item.id === id);
     
     if (index === -1) {
+        // 404 Not Found
         return res.status(404).json({
             error: 'Menu item not found',
             message: `No menu item exists with id ${id}`
@@ -248,6 +220,7 @@ app.delete('/api/menu/:id', (req, res) => {
     const deletedItem = menuItems[index];
     menuItems.splice(index, 1);
     
+    // 200 OK for successful DELETE
     res.status(200).json({
         message: 'Menu item deleted successfully',
         item: deletedItem
@@ -265,6 +238,7 @@ app.use('*', (req, res) => {
 // Error handling middleware
 app.use((err, req, res, next) => {
     console.error('Server error:', err.stack);
+    // 500 Internal Server Error
     res.status(500).json({ 
         error: 'Internal server error',
         message: 'Something went wrong on the server'
@@ -273,11 +247,4 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
     console.log(`Tasty Bites API server running at http://localhost:${PORT}`);
-    console.log('Available endpoints:');
-    console.log('  GET  /');
-    console.log('  GET  /api/menu');
-    console.log('  GET  /api/menu/:id');
-    console.log('  POST /api/menu');
-    console.log('  PUT  /api/menu/:id');
-    console.log('  DEL  /api/menu/:id');
 });
